@@ -91,7 +91,7 @@ class Nightjetter:
                 if station["meta"]:
                     target = station
                     break
-            
+
             if target is not None:
                 return (target["number"], target["meta"])
 
@@ -234,6 +234,7 @@ def protocol_connection(
     csv_out = f"{prefix}/{filename}.csv"
     # TODO: add option to skip prices output
     csv_out_price_prefix = f"{prefix}/prices_{filename}"
+    csv_out_price_comparison = f"{prefix}/{station_from}_{station_to}.csv"
 
     (_, station_from_resl_name) = jetter.findStationId(station_from)
     (_, station_to_resl_name) = jetter.findStationId(station_to)
@@ -245,9 +246,11 @@ def protocol_connection(
     results_komfortschiene = []
     results_flexschiene = []
     avail_cat_types = set()
+    dates = []
 
     for i in range(advance_days):
         next_date = date_start + timedelta(days=i)
+        dates.append(next_date)
         line_init += f"{next_date};"
         offers = jetter.findOffersFiltered(
             station_from, station_to, next_date, passengers
@@ -277,34 +280,43 @@ def protocol_connection(
             f"Processing connection from {station_from_resl_name} to {station_to_resl_name} at {next_date}"
         )
 
-    if csv_out_price_prefix and avail_cat_types:
-        print("Outputting prices by category")
-        for cat_type in avail_cat_types:
-            spar_offers = [str(offer.get(cat_type)) for offer in results_sparschiene]
-            komf_offers = [str(offer.get(cat_type)) for offer in results_komfortschiene]
-            flex_offers = [str(offer.get(cat_type)) for offer in results_flexschiene]
+    whitelisted_cat_types = ["couchette4comfort", "doubleComfort", "doubleComfortPlus", "bicycle"]
 
-            fname_sparschiene = f"{csv_out_price_prefix}-{cat_type}-spar.csv"
-            fname_komfortschiene = f"{csv_out_price_prefix}-{cat_type}-komf.csv"
-            fname_flexschiene = f"{csv_out_price_prefix}-{cat_type}-flex.csv"
+    personCount = sum(
+        1
+        for passenger in passengers
+        if "birthDate" in passenger
+        and datetime.fromisoformat(passenger["birthDate"]).date() < datetime.fromisoformat(AgeGroup.SMALL_KID_0_5).date()
+    )
 
-            for fname in (fname_flexschiene, fname_komfortschiene, fname_sparschiene):
-                init_file(filename=fname, header=line_init)
+    if csv_out_price_comparison:
+        header = f"date;current_date;person_number"
 
-            # Python 3.10+ only syntax
-            with (
-                io.open(fname_sparschiene, "a") as csv_out_file_spar,
-                io.open(fname_komfortschiene, "a") as csv_out_file_komf,
-                io.open(fname_flexschiene, "a") as csv_out_file_flex,
-            ):
-                csv_out_file_spar.write(f";{(';').join(spar_offers)}\n")
-                csv_out_file_komf.write(f";{(';').join(komf_offers)}\n")
-                csv_out_file_flex.write(f";{(';').join(flex_offers)}\n")
+        for cat_type in whitelisted_cat_types:
+            for level in ["spar", "komf", "flex"]:
+                header += f";{cat_type}_{level}"
+        init_file(filename=csv_out_price_comparison, header=header)
 
-    init_file(filename=csv_out, header=line_init)
-    with io.open(csv_out, "a") as csv_out_file:
-        csv_out_file.write(f"{line_time}\n")
+        with (
+            io.open(csv_out_price_comparison, "a") as csv_out_file_price_comparison
+        ):
 
+            now = date.today()
+            for spar_offers, komf_offers, flex_offers, target_date in zip( results_sparschiene, results_komfortschiene, results_flexschiene, dates):
+                csv_out_file_price_comparison.write(f"{target_date};{now};{personCount}")
+                for cat_type in whitelisted_cat_types:
+                    spar_offer = str(spar_offers.get(cat_type))
+                    komf_offer = str(komf_offers.get(cat_type))
+                    flex_offer = str(flex_offers.get(cat_type))
+                    csv_out_file_price_comparison.write(f";{normalize_price(spar_offer)}")
+                    csv_out_file_price_comparison.write(f";{normalize_price(komf_offer)}")
+                    csv_out_file_price_comparison.write(f";{normalize_price(flex_offer)}")
+                csv_out_file_price_comparison.write(f"\n")
+
+def normalize_price(value):
+    if value is None:
+        return ""
+    return str(int(float(value)))
 
 TODAY = date.today()
 
@@ -356,10 +368,18 @@ class Passenger:
             "cards": self.reduction_cards,
         }
 
+@dataclass
+class Bike:
+    def to_dict(self):
+        return {
+            "type": "bike"
+        }
 
-PER1 = Passenger(Gender.FEMALE, AgeGroup.ADULT_15_99, [ReductionCard.KLIMATICKET])
-PER2 = Passenger(Gender.MALE, AgeGroup.ADULT_15_99, [ReductionCard.KLIMATICKET])
-
+PER1 = Passenger(Gender.FEMALE, AgeGroup.ADULT_15_99, [])
+PER2 = Passenger(Gender.MALE, AgeGroup.ADULT_15_99, [])
+KID = Passenger(Gender.MALE, AgeGroup.KID_6_9, [])
+SMALL_KID = Passenger(Gender.MALE, AgeGroup.SMALL_KID_0_5, [])
+BIKE = Bike()
 
 @dataclass
 class Connection:
@@ -367,7 +387,7 @@ class Connection:
     station_to: str
     date_start: date
     advance_days: int
-    passengers: list[Passenger]
+    passengers: list[Passenger | Bike]
 
     def to_kwargs(self) -> dict:
         return {
@@ -380,11 +400,11 @@ class Connection:
 
 CONNECTIONS = [
     Connection(
-        station_from="Wien",
-        station_to="Hannover",
-        date_start=date(2025, 4, 1),
+        station_from="Amsterdam",
+        station_to="Wien",
+        date_start=date(2025, 6, 1),
         advance_days=90,
-        passengers=[PER1, PER2],
+        passengers=[PER1, PER2, KID, KID, BIKE, BIKE],
     )
 ]
 
